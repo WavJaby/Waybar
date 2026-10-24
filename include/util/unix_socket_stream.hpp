@@ -7,6 +7,9 @@
 
 namespace waybar::util {
 
+// Expand environment variables without invoking a shell or splitting paths.
+std::string expandSocketPath(const std::string& path);
+
 // Newline-delimited subscriptions driven entirely by the GLib main loop.
 class UnixSocketStream {
  public:

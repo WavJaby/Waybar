@@ -11,6 +11,7 @@
 #include "util/command.hpp"
 #include "util/json.hpp"
 #include "util/sleeper_thread.hpp"
+#include "util/unix_socket_stream.hpp"
 
 namespace waybar::modules {
 
@@ -22,6 +23,7 @@ class IStrategy {
   // Runs on the worker thread before update(). Use it for blocking work (e.g.
   // spawning a user script) so the GTK main loop isn't stalled. Default no-op.
   virtual void fetch() {}
+  virtual void setSocketOutput(const Json::Value&) {}
   virtual void update() = 0;
 };
 
@@ -31,6 +33,7 @@ class SingleImageStrategy : public IStrategy {
                       bool);
   ~SingleImageStrategy() override = default;
   void update() override;
+  void setSocketOutput(const Json::Value&) override;
 
  private:
   void parseOutputRaw();
@@ -40,6 +43,8 @@ class SingleImageStrategy : public IStrategy {
   Gtk::Image image_;
   std::string path_;
   std::string tooltip_;
+  Json::Value revision_;
+  bool image_dirty_{true};
   int size_;
   Gtk::Box box_;
   bool hasTooltip_;
@@ -80,18 +85,21 @@ class MultipleImageStrategy : public IStrategy {
 class Image : public AModule {
  public:
   Image(const std::string&, const Json::Value&);
-  virtual ~Image() = default;
+  virtual ~Image();
   auto update() -> void override;
   void refresh(int /*signal*/) override;
 
  private:
   void delayWorker();
+  void socketWorker();
   void handleEvent();
   static std::unique_ptr<image::IStrategy> getStrategy(const std::string&, const Json::Value&,
                                                        const std::string&, Gtk::EventBox&, bool);
 
   std::chrono::milliseconds interval_;
   std::unique_ptr<image::IStrategy> strategy_;
+  std::unique_ptr<util::UnixSocketStream> socket_stream_;
+  std::string last_socket_output_;
   util::SleeperThread thread_;
 };
 

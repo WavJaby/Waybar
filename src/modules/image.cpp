@@ -2,11 +2,19 @@
 
 #include <json/value.h>
 
+#include <cmath>
 #include <config.hpp>
+#include <limits>
+#include <stdexcept>
 
 waybar::modules::Image::Image(const std::string& id, const Json::Value& config)
     : AModule(config, "image", id) {
   strategy_ = getStrategy(id, config, MODULE_CLASS, event_box_, tooltipEnabled());
+
+  if (config_["socket"].isString()) {
+    socketWorker();
+    return;
+  }
 
   const auto once = std::chrono::milliseconds::max();
   if (!config_.isMember("interval") || config_["interval"].isNull() ||
@@ -26,6 +34,56 @@ waybar::modules::Image::Image(const std::string& id, const Json::Value& config)
   }
 
   delayWorker();
+}
+
+waybar::modules::Image::~Image() {
+  if (socket_stream_) socket_stream_->stop();
+}
+
+void waybar::modules::Image::socketWorker() {
+  for (const auto* option : {"path", "exec", "interval", "signal", "multiple", "entries"}) {
+    if (!config_[option].isNull()) {
+      throw std::invalid_argument(fmt::format("image: socket cannot be used with {}", option));
+    }
+  }
+  if (!config_["socket-request"].isNull() && !config_["socket-request"].isString()) {
+    throw std::invalid_argument("socket-request must be a string");
+  }
+  unsigned retry_ms = 5000;
+  if (!config_["socket-reconnect-interval"].isNull()) {
+    if (!config_["socket-reconnect-interval"].isNumeric()) {
+      throw std::invalid_argument("socket-reconnect-interval must be numeric");
+    }
+    const auto seconds = config_["socket-reconnect-interval"].asDouble();
+    if (!std::isfinite(seconds) || seconds <= 0 ||
+        seconds > std::numeric_limits<unsigned>::max() / 1000.0) {
+      throw std::invalid_argument("socket-reconnect-interval is out of range");
+    }
+    retry_ms = std::max(1U, static_cast<unsigned>(seconds * 1000));
+  }
+  socket_stream_ = std::make_unique<util::UnixSocketStream>(
+      [this](const std::string& line) {
+        if (line == last_socket_output_) return;
+        try {
+          const auto data = util::JsonParser().parse(line);
+          if (!data.isObject() || !data["path"].isString() ||
+              (!data["tooltip"].isNull() && !data["tooltip"].isString())) {
+            throw std::invalid_argument("expected an image path and optional tooltip string");
+          }
+          strategy_->setSocketOutput(data);
+          last_socket_output_ = line;
+          dp.emit();
+        } catch (const std::exception& e) {
+          spdlog::warn("Invalid image socket record: {}", e.what());
+        }
+      },
+      [this] {
+        last_socket_output_.clear();
+        strategy_->setSocketOutput(Json::Value{});
+        dp.emit();
+      });
+  socket_stream_->start(util::expandSocketPath(config_["socket"].asString()),
+                        config_["socket-request"].asString(), retry_ms);
 }
 
 auto waybar::modules::Image::getStrategy(const std::string& id, const Json::Value& cfg,
@@ -249,7 +307,15 @@ SingleImageStrategy::SingleImageStrategy(const std::string& id, const Json::Valu
 }
 
 void SingleImageStrategy::update() {
-  if (config_["path"].isString()) {
+  if (config_["socket"].isString()) {
+    if (!image_dirty_) {
+      if (hasTooltip_ && box_.get_tooltip_markup() != tooltip_) {
+        box_.set_tooltip_markup(tooltip_);
+      }
+      return;
+    }
+    // The subscription already supplied a complete image record.
+  } else if (config_["path"].isString()) {
     auto p = config_["path"].asString();
     auto result = Config::tryExpandPath(p, "");
     // Only use the expanded path when it resolves to exactly one existing match;
@@ -276,6 +342,7 @@ void SingleImageStrategy::update() {
   }
 
   if (pixbuf) {
+    image_dirty_ = false;
     // Building a HiDPI-aware cairo surface requires a realized widget: it reads the
     // GdkWindow and its scale factor. During startup update() can run before the
     // Gtk::Image is realized, in which case get_window() is null; feeding that path a
@@ -291,7 +358,7 @@ void SingleImageStrategy::update() {
     }
     image_.show();
 
-    if (hasTooltip_ && !tooltip_.empty()) {
+    if (hasTooltip_) {
       if (box_.get_tooltip_markup() != tooltip_) {
         box_.set_tooltip_markup(tooltip_);
       }
@@ -303,6 +370,14 @@ void SingleImageStrategy::update() {
     image_.hide();
     box_.get_style_context()->add_class("empty");
   }
+}
+
+void SingleImageStrategy::setSocketOutput(const Json::Value& data) {
+  const auto path = data["path"].isString() ? data["path"].asString() : "";
+  image_dirty_ = image_dirty_ || path != path_ || data["revision"] != revision_;
+  path_ = path;
+  revision_ = data["revision"];
+  tooltip_ = data["tooltip"].isString() ? data["tooltip"].asString() : "";
 }
 
 void SingleImageStrategy::parseOutputRaw() {

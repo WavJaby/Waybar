@@ -4,6 +4,7 @@
 #include <catch2/catch.hpp>
 #endif
 
+#include <glibmm/miscutils.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -256,4 +257,15 @@ TEST_CASE("Unix socket subscriptions validate paths and requests", "[util][unix_
   REQUIRE_THROWS_AS(stream.start("", ""), std::invalid_argument);
   REQUIRE_THROWS_AS(stream.start(std::string(200, 'x'), ""), std::invalid_argument);
   REQUIRE_THROWS_AS(stream.start("/tmp/unused", "details\nicon"), std::invalid_argument);
+}
+
+TEST_CASE("Socket paths expand variables without invoking a shell", "[util][unix_socket_stream]") {
+  Glib::setenv("WAYBAR_SOCKET_PATH_TEST", "/tmp/with spaces", true);
+  REQUIRE(waybar::util::expandSocketPath("${WAYBAR_SOCKET_PATH_TEST}/stream") ==
+          "/tmp/with spaces/stream");
+  REQUIRE(waybar::util::expandSocketPath("$WAYBAR_SOCKET_PATH_TEST/$(echo literal)") ==
+          "/tmp/with spaces/$(echo literal)");
+  Glib::unsetenv("WAYBAR_SOCKET_PATH_TEST");
+  REQUIRE_THROWS_AS(waybar::util::expandSocketPath("$WAYBAR_SOCKET_PATH_TEST/stream"),
+                    std::invalid_argument);
 }

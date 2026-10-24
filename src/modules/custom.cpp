@@ -7,7 +7,6 @@
 #include <charconv>
 #include <cmath>
 #include <limits>
-#include <regex>
 #include <stdexcept>
 #include <utility>
 
@@ -87,25 +86,7 @@ void waybar::modules::Custom::socketWorker() {
     retry_ms = std::max(1U, static_cast<unsigned>(seconds * 1000));
   }
 
-  // Expand variables without executing a shell, splitting words, or globbing.
-  const auto path = config_["socket"].asString();
-  const std::regex variable(R"(\$\{([A-Za-z_][A-Za-z_0-9]*)\}|\$([A-Za-z_][A-Za-z_0-9]*))");
-  std::string expanded;
-  size_t offset = 0;
-  for (auto it = std::sregex_iterator(path.begin(), path.end(), variable);
-       it != std::sregex_iterator(); ++it) {
-    const auto& match = *it;
-    expanded.append(path, offset, match.position() - offset);
-    const auto name = match[1].matched ? match[1].str() : match[2].str();
-    bool found = false;
-    const auto value = Glib::getenv(name, found);
-    if (!found) {
-      throw std::invalid_argument("Socket path environment variable is unset: " + name);
-    }
-    expanded += value;
-    offset = match.position() + match.length();
-  }
-  expanded.append(path, offset, std::string::npos);
+  const auto expanded = util::expandSocketPath(config_["socket"].asString());
 
   output_ = {.exit_code = 1, .out = ""};
   socket_stream_ = std::make_unique<util::UnixSocketStream>(

@@ -1,5 +1,6 @@
 #include "util/unix_socket_stream.hpp"
 
+#include <glibmm/miscutils.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -8,10 +9,32 @@
 #include <array>
 #include <cerrno>
 #include <cstring>
+#include <regex>
 #include <stdexcept>
 #include <utility>
 
 namespace waybar::util {
+
+std::string expandSocketPath(const std::string& path) {
+  const std::regex variable(R"(\$\{([A-Za-z_][A-Za-z_0-9]*)\}|\$([A-Za-z_][A-Za-z_0-9]*))");
+  std::string expanded;
+  size_t offset = 0;
+  for (auto it = std::sregex_iterator(path.begin(), path.end(), variable);
+       it != std::sregex_iterator(); ++it) {
+    const auto& match = *it;
+    expanded.append(path, offset, match.position() - offset);
+    const auto name = match[1].matched ? match[1].str() : match[2].str();
+    bool found = false;
+    const auto value = Glib::getenv(name, found);
+    if (!found) {
+      throw std::invalid_argument("Socket path environment variable is unset: " + name);
+    }
+    expanded += value;
+    offset = match.position() + match.length();
+  }
+  expanded.append(path, offset, std::string::npos);
+  return expanded;
+}
 
 UnixSocketStream::UnixSocketStream(OutputCallback on_output, DisconnectCallback on_disconnect)
     : on_output_(std::move(on_output)), on_disconnect_(std::move(on_disconnect)) {}

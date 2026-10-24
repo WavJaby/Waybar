@@ -17,6 +17,32 @@ reason this wiki page is split into two parts
 
 # CONFIGURATION
 
+*socket*: ++
+	typeof: string ++
+	Subscribe directly to a Unix stream socket instead of running a command.
+	Environment variables in the path are expanded without a shell.
+	Cannot be combined with *path*, *exec*, *interval*, *signal*, *multiple*, or *entries*.
+	Each newline-delimited JSON record supplies a *path*, an optional *tooltip*,
+	and an optional *revision*. Change *revision* after atomically replacing an
+	image at the same path. Unchanged records are ignored; tooltip-only updates
+	do not decode the image again. The image is hidden while disconnected.
+	Records are limited to 1 MiB; incomplete records are discarded on disconnect.
+
+*socket-request*: ++
+	typeof: string ++
+	Optional subscription line sent after connecting, followed by a newline.
+	An empty value sends nothing. Maximum size is 64 KiB.
+
+*socket-reconnect-interval*: ++
+	typeof: integer or float ++
+	default: 5 ++
+	Delay in seconds before reconnecting after connection failure or EOF.
+	Must be positive; values below 0.001 are rounded up to 0.001.
+	There is no periodic wake-up while connected. Connection establishment and
+	the initial request time out after 5 seconds.
+
+Example record: `{"path":"/run/user/1000/chart.png","revision":"42","tooltip":"Quota"}`.
+
 For single *image*
 
 *path*: ++
