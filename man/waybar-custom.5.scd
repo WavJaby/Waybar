@@ -5,7 +5,7 @@ waybar - custom module
 
 # DESCRIPTION
 
-The *custom* module displays either the output of a script or static text.
+The *custom* module displays the output of a script, a Unix socket subscription, or static text.
 To display static text, specify only the *format* field.
 
 # CONFIGURATION
@@ -15,6 +15,41 @@ Addressed by *custom/<name>*
 *exec*: ++
 	typeof: string ++
 	The path to the script, which should be executed.
+
+*socket*: ++
+	typeof: string ++
+	Path to a Unix stream socket supplying newline-delimited records. Environment
+	variables in the form $NAME or ${NAME} are expanded without a shell. ++
+	Waybar connects directly, without starting a script or a polling thread.
+	Cannot be combined with *exec*, *exec-if*, *interval*, *signal*, or *restart-interval*.
+	Use *return-type*: *json* for JSON records; raw records support a single text line.
+	Identical records do not trigger an update. The module is hidden while disconnected.
+	Incomplete records are discarded on disconnect; records are limited to 1 MiB.
+	Connection establishment and the initial request time out after 5 seconds;
+	a connected, idle subscription has no timeout or periodic wake-up.
+
+*socket-request*: ++
+	typeof: string ++
+	Optional single-line subscription request sent after each connection, followed
+	by a newline. An empty value sends nothing. Maximum size is 64 KiB.
+	Click and scroll commands still work; *exec-on-event* does not resend this request.
+
+*socket-reconnect-interval*: ++
+	typeof: integer or float ++
+	default: 5 ++
+	Delay in seconds before reconnecting after disconnection or a failed connection.
+	Must be positive; values below 0.001 are rounded up to 0.001.
+	The timer runs only while disconnected.
+
+Example subscription:
+
+```
+"custom/battery": {
+    "socket": "$XDG_RUNTIME_DIR/waybar-battery-daemon.sock",
+    "socket-request": "details",
+    "return-type": "json"
+}
+```
 
 *exec-if*: ++
 	typeof: string ++

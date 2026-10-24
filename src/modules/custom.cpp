@@ -7,6 +7,7 @@
 #include <charconv>
 #include <cmath>
 #include <limits>
+#include <regex>
 #include <stdexcept>
 #include <utility>
 
@@ -27,8 +28,10 @@ waybar::modules::Custom::Custom(const std::string& name, const std::string& id,
     spdlog::warn("There is no configuration for 'custom/{}', element will be hidden", name);
   }
 
-  if (!config_["signal"].empty() && config_["interval"].empty() &&
-      config_["restart-interval"].empty()) {
+  if (config_["socket"].isString()) {
+    socketWorker();
+  } else if (!config_["signal"].empty() && config_["interval"].empty() &&
+             config_["restart-interval"].empty()) {
     waitingWorker();
   } else if (interval_.count() > 0) {
     delayWorker();
@@ -53,9 +56,71 @@ waybar::modules::Custom::Custom(const std::string& name, const std::string& id,
 waybar::modules::Custom::~Custom() {
   restart_connection_.disconnect();
   monitor_geometry_connection_.disconnect();
+  if (socket_stream_) {
+    socket_stream_->stop();
+  }
   if (continuous_stream_) {
     continuous_stream_->stop();
   }
+}
+
+void waybar::modules::Custom::socketWorker() {
+  for (const auto* option : {"exec", "exec-if", "interval", "signal", "restart-interval"}) {
+    if (!config_[option].isNull()) {
+      throw std::invalid_argument(
+          fmt::format("custom/{}: socket cannot be used with {}", name_, option));
+    }
+  }
+  if (!config_["socket-request"].isNull() && !config_["socket-request"].isString()) {
+    throw std::invalid_argument("socket-request must be a string");
+  }
+  unsigned retry_ms = 5000;
+  if (!config_["socket-reconnect-interval"].isNull()) {
+    if (!config_["socket-reconnect-interval"].isNumeric()) {
+      throw std::invalid_argument("socket-reconnect-interval must be a positive number");
+    }
+    const auto seconds = config_["socket-reconnect-interval"].asDouble();
+    if (!std::isfinite(seconds) || seconds <= 0 ||
+        seconds > std::numeric_limits<unsigned>::max() / 1000.0) {
+      throw std::invalid_argument("socket-reconnect-interval is out of range");
+    }
+    retry_ms = std::max(1U, static_cast<unsigned>(seconds * 1000));
+  }
+
+  // Expand variables without executing a shell, splitting words, or globbing.
+  const auto path = config_["socket"].asString();
+  const std::regex variable(R"(\$\{([A-Za-z_][A-Za-z_0-9]*)\}|\$([A-Za-z_][A-Za-z_0-9]*))");
+  std::string expanded;
+  size_t offset = 0;
+  for (auto it = std::sregex_iterator(path.begin(), path.end(), variable);
+       it != std::sregex_iterator(); ++it) {
+    const auto& match = *it;
+    expanded.append(path, offset, match.position() - offset);
+    const auto name = match[1].matched ? match[1].str() : match[2].str();
+    bool found = false;
+    const auto value = Glib::getenv(name, found);
+    if (!found) {
+      throw std::invalid_argument("Socket path environment variable is unset: " + name);
+    }
+    expanded += value;
+    offset = match.position() + match.length();
+  }
+  expanded.append(path, offset, std::string::npos);
+
+  output_ = {.exit_code = 1, .out = ""};
+  socket_stream_ = std::make_unique<util::UnixSocketStream>(
+      [this](const std::string& output) {
+        if (output_.exit_code != 0 || output_.out != output) {
+          output_ = {.exit_code = 0, .out = output};
+          dp.emit();
+        }
+      },
+      [this] {
+        output_ = {.exit_code = 1, .out = ""};
+        dp.emit();
+      });
+  socket_stream_->start(expanded, config_["socket-request"].asString(), retry_ms);
+  dp.emit();
 }
 
 void waybar::modules::Custom::delayWorker() {
@@ -207,7 +272,8 @@ bool waybar::modules::Custom::handleToggle(GdkEventButton* const& e) {
 
 auto waybar::modules::Custom::update() -> void {
   // Hide label if output is empty
-  if ((config_["exec"].isString() || config_["exec-if"].isString()) &&
+  if ((config_["exec"].isString() || config_["exec-if"].isString() ||
+       config_["socket"].isString()) &&
       (output_.out.empty() || output_.exit_code != 0)) {
     event_box_.hide();
     width_request_.reset();

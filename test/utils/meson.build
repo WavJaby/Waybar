@@ -17,9 +17,11 @@ test_src = files(
     'sleeper_thread.cpp',
     'command.cpp',
     'command_line_stream.cpp',
+    'unix_socket_stream.cpp',
     'css_reload_helper.cpp',
     '../../src/util/css_reload_helper.cpp',
     '../../src/util/command_line_stream.cpp',
+    '../../src/util/unix_socket_stream.cpp',
 )
 
 if tz_dep.found()

@@ -14,6 +14,7 @@
 #include "util/command_line_stream.hpp"
 #include "util/json.hpp"
 #include "util/sleeper_thread.hpp"
+#include "util/unix_socket_stream.hpp"
 
 namespace waybar::modules {
 
@@ -34,6 +35,7 @@ class Custom : public AIconLabel {
 
   void delayWorker();
   void continuousWorker();
+  void socketWorker();
   void startContinuousProcess(bool throw_on_failure);
   void handleContinuousProcessExit(int exit_code);
   void scheduleContinuousRestart();
@@ -67,6 +69,7 @@ class Custom : public AIconLabel {
   util::command::res output_;
   util::JsonParser parser_;
   std::unique_ptr<util::command::LineStream> continuous_stream_;
+  std::unique_ptr<util::UnixSocketStream> socket_stream_;
   sigc::connection restart_connection_;
   sigc::connection monitor_geometry_connection_;
 
