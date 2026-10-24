@@ -2,15 +2,24 @@
 
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <cerrno>
+#include <charconv>
+#include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
 waybar::modules::Custom::Custom(const std::string& name, const std::string& id,
-                                const Json::Value& config, const std::string& output_name)
+                                const Json::Value& config, const std::string& output_name,
+                                Glib::RefPtr<Gdk::Monitor> monitor, bool vertical,
+                                uint32_t bar_axis_length)
     : AIconLabel(config, "custom-" + name, id, "{}"),
       name_(name),
       output_name_(output_name),
+      monitor_(std::move(monitor)),
+      vertical_(vertical),
+      bar_axis_length_(bar_axis_length),
       id_(id),
       tooltip_format_enabled_{config_["tooltip-format"].isString()},
       percentage_(0) {
@@ -35,10 +44,15 @@ waybar::modules::Custom::Custom(const std::string& name, const std::string& id,
   if (config["icon-size"].isUInt()) {
     app_icon_size_ = config["icon-size"].asUInt();
   }
+  if (monitor_) {
+    monitor_geometry_connection_ = monitor_->property_geometry().signal_changed().connect(
+        sigc::mem_fun(*this, &Custom::applyWidthRequest));
+  }
 }
 
 waybar::modules::Custom::~Custom() {
   restart_connection_.disconnect();
+  monitor_geometry_connection_.disconnect();
   if (continuous_stream_) {
     continuous_stream_->stop();
   }
@@ -196,6 +210,7 @@ auto waybar::modules::Custom::update() -> void {
   if ((config_["exec"].isString() || config_["exec-if"].isString()) &&
       (output_.out.empty() || output_.exit_code != 0)) {
     event_box_.hide();
+    width_request_.reset();
   } else {
     if (config_["return-type"].asString() == "json") {
       parseOutputJson();
@@ -208,7 +223,7 @@ auto waybar::modules::Custom::update() -> void {
                              fmt::arg("icon", getIcon(percentage_, alt_)),
                              fmt::arg("percentage", percentage_));
       if ((config_["hide-empty-text"].asBool() && text_.empty()) ||
-          (str.empty() && image_path_.empty() && image_name_.empty())) {
+          (str.empty() && image_path_.empty() && image_name_.empty() && !width_request_)) {
         event_box_.hide();
       } else {
         setLabelMarkup(str);
@@ -279,6 +294,7 @@ auto waybar::modules::Custom::update() -> void {
       }
     }
   }
+  applyWidthRequest();
   // Call parent update
   AIconLabel::update();
 
@@ -290,7 +306,51 @@ auto waybar::modules::Custom::update() -> void {
   }
 }
 
+void waybar::modules::Custom::applyWidthRequest() {
+  int width_request = -1;
+  int height_request = -1;
+  if (width_request_) {
+    double requested_length = width_request_->value;
+    if (width_request_->unit == WidthUnit::PERCENTAGE) {
+      int bar_axis_length = 0;
+      if (bar_axis_length_ > 0) {
+        bar_axis_length = static_cast<int>(std::min<uint32_t>(
+            bar_axis_length_, static_cast<uint32_t>(std::numeric_limits<int>::max())));
+      } else if (monitor_) {
+        const auto geometry = *monitor_->property_geometry().get_value().gobj();
+        bar_axis_length = vertical_ ? geometry.height : geometry.width;
+      }
+      if (bar_axis_length > 0) {
+        requested_length = static_cast<double>(bar_axis_length) * requested_length / 100.0;
+      } else {
+        requested_length = -1.0;
+      }
+    }
+
+    if (requested_length >= 0.0) {
+      const auto max_length = static_cast<double>(std::numeric_limits<int>::max());
+      const int length = requested_length >= max_length
+                             ? std::numeric_limits<int>::max()
+                             : static_cast<int>(std::lround(requested_length));
+      if (vertical_) {
+        height_request = length;
+      } else {
+        width_request = length;
+      }
+    }
+  }
+
+  if (width_request == applied_width_request_ && height_request == applied_height_request_) {
+    return;
+  }
+
+  event_box_.set_size_request(width_request, height_request);
+  applied_width_request_ = width_request;
+  applied_height_request_ = height_request;
+}
+
 void waybar::modules::Custom::parseOutputRaw() {
+  width_request_.reset();
   std::istringstream output(output_.out);
   std::string line;
   int i = 0;
@@ -326,6 +386,7 @@ void waybar::modules::Custom::parseOutputRaw() {
 }
 
 void waybar::modules::Custom::parseOutputJson() {
+  width_request_.reset();
   std::istringstream output(output_.out);
   std::string line;
   class_.clear();
@@ -361,6 +422,39 @@ void waybar::modules::Custom::parseOutputJson() {
     } else if (parsed["class"].isArray()) {
       for (auto const& c : parsed["class"]) {
         class_.push_back(c.asString());
+      }
+    }
+
+    if (parsed["width"].isString()) {
+      auto width = parsed["width"].asString();
+      const auto first = width.find_first_not_of(" \t\n\r\f\v");
+      if (first != std::string::npos) {
+        const auto last = width.find_last_not_of(" \t\n\r\f\v");
+        width = width.substr(first, last - first + 1);
+
+        WidthUnit unit = WidthUnit::PIXELS;
+        std::size_t number_length = 0;
+        if (width.back() == '%') {
+          unit = WidthUnit::PERCENTAGE;
+          number_length = width.size() - 1;
+        } else if (width.size() >= 2 && width.compare(width.size() - 2, 2, "px") == 0) {
+          unit = WidthUnit::PIXELS;
+          number_length = width.size() - 2;
+        }
+
+        if (number_length > 0) {
+          const auto* begin = width.data();
+          const auto* end = begin + number_length;
+          if (*begin == '+') {
+            ++begin;
+          }
+          double value = 0.0;
+          const auto result = std::from_chars(begin, end, value);
+          if (begin != end && result.ec == std::errc{} && result.ptr == end &&
+              std::isfinite(value) && value >= 0.0) {
+            width_request_ = WidthRequest{value, unit};
+          }
+        }
       }
     }
 

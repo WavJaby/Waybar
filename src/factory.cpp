@@ -393,7 +393,12 @@ waybar::AModule* waybar::Factory::makeModule(const std::string& name,
       return new waybar::modules::Temperature(id, config_[name]);
     }
     if (ref.compare(0, 7, "custom/") == 0 && ref.size() > 7) {
-      return new waybar::modules::Custom(ref.substr(7), id, config_[name], bar_.output->name);
+      const bool vertical = bar_.orientation == Gtk::ORIENTATION_VERTICAL;
+      const auto& configured_axis_length = bar_.config[vertical ? "height" : "width"];
+      const uint32_t bar_axis_length =
+          configured_axis_length.isUInt() ? configured_axis_length.asUInt() : 0;
+      return new waybar::modules::Custom(ref.substr(7), id, config_[name], bar_.output->name,
+                                         bar_.output->monitor, vertical, bar_axis_length);
     }
     if (ref.compare(0, 13, "custom-graph/") == 0 && ref.size() > 13) {
       return new waybar::modules::CustomGraph(ref.substr(13), id, config_[name], bar_.output->name);

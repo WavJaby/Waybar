@@ -174,6 +174,18 @@ piping the output of your script through *jq --unbuffered --compact-output*.
 
 The *class* parameter also accepts an array of strings.
 
+The optional *width* field sets the module's requested length using a CSS-like
+string with non-negative values and either *px* or *%* units, such as `"100px"`
+or `"56.5%"`. This is a limited Waybar output format, not a CSS value. Pixel
+lengths use GTK logical pixels. Percentages are based on the bar's length:
+width for horizontal bars and height for vertical bars. The requested size is
+recalculated when the monitor geometry changes. If the bar has a fixed length
+configured with *width* or *height*, that length is used as the percentage
+basis. If the field is omitted or invalid, the module uses its natural size.
+GTK may allocate more space when the module's content or CSS requires it.
+
+For example, `{"text":"","width":"56.5%"}` requests a length of 56.5% of the bar.
+
 To have multiline tooltips, use *\\r* in your script to separate the lines. If
 using PowerShell for scripting, use the standard newline operator "\`n" in double
 quotes; *\\r* and *\\n* will not work.
